@@ -44,6 +44,8 @@ var outFile = flag.String("config.write-to", "ecs_file_sd.yml", "path of file to
 var interval = flag.Duration("config.scrape-interval", 60*time.Second, "interval at which to scrape the AWS API for ECS service discovery information")
 var times = flag.Int("config.scrape-times", 0, "how many times to scrape before exiting (0 = infinite)")
 var roleArn = flag.String("config.role-arn", "", "ARN of the role to assume when scraping the AWS API (optional)")
+var enableECSTags = flag.Bool("config.enable-ecs-tags", false, "Enable ECS tags to be propagated as labels during scrape.")
+var filterECSTags = flag.String("config.filter-ecs-tags", "", "Specify ECS tags to be allowed when \"config.propagate-ecs-tags\" is enabled. Multiple tags should be comma separated, for example - \"team,aws:ecs:serviceName,aws:ecs:clusterName\"")
 var prometheusPortLabel = flag.String("config.port-label", "PROMETHEUS_EXPORTER_PORT", "Docker label to define the scrape port of the application (if missing an application won't be scraped)")
 var prometheusPathLabel = flag.String("config.path-label", "PROMETHEUS_EXPORTER_PATH", "Docker label to define the scrape path of the application")
 var prometheusSchemeLabel = flag.String("config.scheme-label", "PROMETHEUS_EXPORTER_SCHEME", "Docker label to define the scheme of the target application")
@@ -119,6 +121,9 @@ func normalizeLabelName(label string) string {
 	return labelNameReplacer.Replace(label)
 }
 
+// Allowed ECS Tags to be propagated as labels
+var filteredECSTags map[string]interface{}
+
 // ExporterInformation returns a list of []*PrometheusTaskInfo
 // enumerating the IPs, ports that the task's containers exports
 // to Prometheus (one per container), so long as the Docker
@@ -186,9 +191,18 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 	labels["cluster_arn"] = *t.ClusterArn
 
 	// ECS task tags as labels
-	for _, tag := range t.Tags {
-		tagKey := normalizeLabelName(*tag.Key)
-		labels[tagKey] = *tag.Value
+	if *enableECSTags {
+		for _, tag := range t.Tags {
+			if len(filteredECSTags) > 0 {
+				// check if the ECS tag is to be propagated
+				if _, ok := filteredECSTags[*tag.Key]; !ok {
+					continue
+				}
+			}
+
+			tagKey := normalizeLabelName(*tag.Key)
+			labels[tagKey] = *tag.Value
+		}
 	}
 
 	for _, i := range t.Containers {
@@ -604,6 +618,29 @@ func GetAugmentedTasks(svc *ecs.Client, svcec2 *ec2.Client, clusterArns []*strin
 	return tasks, nil
 }
 
+// getECSTagsToBePropagated returns allowed ECS tags as a map,
+// converts a comma separated ECS tags string into a map
+func getFilteredECSTags(ecsTags string) map[string]interface{} {
+	if !*enableECSTags {
+		// ECS tags disabled
+		return nil
+	}
+
+	if len(ecsTags) == 0 {
+		// no tags specified
+		return nil
+	}
+
+	filteredECSTagsList := strings.Split(ecsTags, ",")
+	var filteredECSTagsMap = make(map[string]interface{})
+
+	for _, tag := range filteredECSTagsList {
+		filteredECSTagsMap[tag] = nil
+	}
+
+	return filteredECSTagsMap
+}
+
 func main() {
 	flag.Parse()
 
@@ -622,6 +659,9 @@ func main() {
 	// Initialise AWS Service clients
 	svc := ecs.NewFromConfig(config)
 	svcec2 := ec2.NewFromConfig(config)
+
+	// Prepare allowed list of ECS tags
+	filteredECSTags = getFilteredECSTags(*filterECSTags)
 
 	work := func() {
 		var clusters *ecs.ListClustersOutput
