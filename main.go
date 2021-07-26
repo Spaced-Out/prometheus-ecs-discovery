@@ -110,6 +110,15 @@ type PrometheusTaskInfo struct {
 	Labels  map[string]string `yaml:"labels"`
 }
 
+// String replacer for normalizing label names
+var labelNameReplacer = strings.NewReplacer(".", "_", "-", "_", " ", "_", ":", "_")
+
+// normalizeLabelName normalizes label name passed as argument
+// according to Prometheus' label convention
+func normalizeLabelName(label string) string {
+	return labelNameReplacer.Replace(label)
+}
+
 // ExporterInformation returns a list of []*PrometheusTaskInfo
 // enumerating the IPs, ports that the task's containers exports
 // to Prometheus (one per container), so long as the Docker
@@ -178,7 +187,8 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 
 	// ECS task tags as labels
 	for _, tag := range t.Tags {
-		labels[*tag.Key] = *tag.Value
+		tagKey := normalizeLabelName(*tag.Key)
+		labels[normalizeLabelName(tagKey)] = *tag.Value
 	}
 
 	for _, i := range t.Containers {
