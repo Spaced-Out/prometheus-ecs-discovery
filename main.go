@@ -188,7 +188,7 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 	// ECS task tags as labels
 	for _, tag := range t.Tags {
 		tagKey := normalizeLabelName(*tag.Key)
-		labels[normalizeLabelName(tagKey)] = *tag.Value
+		labels[tagKey] = *tag.Value
 	}
 
 	for _, i := range t.Containers {
