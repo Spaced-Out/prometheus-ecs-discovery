@@ -36,20 +36,6 @@ import (
 	"github.com/go-yaml/yaml"
 )
 
-type labels struct {
-	TaskArn       string `yaml:"task_arn"`
-	TaskName      string `yaml:"task_name"`
-	JobName       string `yaml:"job,omitempty"`
-	TaskRevision  string `yaml:"task_revision"`
-	TaskGroup     string `yaml:"task_group"`
-	ClusterArn    string `yaml:"cluster_arn"`
-	ContainerName string `yaml:"container_name"`
-	ContainerArn  string `yaml:"container_arn"`
-	DockerImage   string `yaml:"docker_image"`
-	MetricsPath   string `yaml:"__metrics_path__,omitempty"`
-	Scheme        string `yaml:"__scheme__,omitempty"`
-}
-
 // Docker label for enabling dynamic port detection
 const dynamicPortLabel = "PROMETHEUS_DYNAMIC_EXPORT"
 
@@ -60,7 +46,7 @@ var times = flag.Int("config.scrape-times", 0, "how many times to scrape before 
 var roleArn = flag.String("config.role-arn", "", "ARN of the role to assume when scraping the AWS API (optional)")
 var prometheusPortLabel = flag.String("config.port-label", "PROMETHEUS_EXPORTER_PORT", "Docker label to define the scrape port of the application (if missing an application won't be scraped)")
 var prometheusPathLabel = flag.String("config.path-label", "PROMETHEUS_EXPORTER_PATH", "Docker label to define the scrape path of the application")
-var prometheusSchemeLabel= flag.String("config.scheme-label", "PROMETHEUS_EXPORTER_SCHEME", "Docker label to define the scheme of the target application")
+var prometheusSchemeLabel = flag.String("config.scheme-label", "PROMETHEUS_EXPORTER_SCHEME", "Docker label to define the scheme of the target application")
 var prometheusFilterLabel = flag.String("config.filter-label", "", "Docker label (and optionally value) to require to scrape the application")
 var prometheusServerNameLabel = flag.String("config.server-name-label", "PROMETHEUS_EXPORTER_SERVER_NAME", "Docker label to define the server name")
 var prometheusJobNameLabel = flag.String("config.job-name-label", "PROMETHEUS_EXPORTER_JOB_NAME", "Docker label to define the job name")
@@ -120,8 +106,8 @@ type PrometheusContainer struct {
 // PrometheusTaskInfo is the final structure that will be
 // output as a Prometheus file service discovery config.
 type PrometheusTaskInfo struct {
-	Targets []string `yaml:"targets"`
-	Labels  labels   `yaml:"labels"`
+	Targets []string          `yaml:"targets"`
+	Labels  map[string]string `yaml:"labels"`
 }
 
 // ExporterInformation returns a list of []*PrometheusTaskInfo
@@ -180,6 +166,19 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 	var filter []string
 	if *prometheusFilterLabel != "" {
 		filter = strings.Split(*prometheusFilterLabel, "=")
+	}
+
+	labels := make(map[string]string)
+
+	// Default labels
+	labels["task_arn"] = *t.TaskArn
+	labels["task_name"] = *t.TaskDefinition.Family
+	labels["task_group"] = *t.Group
+	labels["cluster_arn"] = *t.ClusterArn
+
+	// ECS task tags as labels
+	for _, tag := range t.Tags {
+		labels[*tag.Key] = *tag.Value
 	}
 
 	for _, i := range t.Containers {
@@ -278,26 +277,23 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 			host = ip
 		}
 
-		labels := labels{
-			TaskArn:       *t.TaskArn,
-			TaskName:      *t.TaskDefinition.Family,
-			JobName:       d.DockerLabels[*prometheusJobNameLabel],
-			TaskRevision:  fmt.Sprintf("%d", t.TaskDefinition.Revision),
-			TaskGroup:     *t.Group,
-			ClusterArn:    *t.ClusterArn,
-			ContainerName: *i.Name,
-			ContainerArn:  *i.ContainerArn,
-			DockerImage:   *d.Image,
-		}
+		// Default labels
+		labels["job"] = d.DockerLabels[*prometheusJobNameLabel]
+		labels["task_revision"] = fmt.Sprintf("%d", t.TaskDefinition.Revision)
+		labels["container_name"] = *i.Name
+		labels["container_arn"] = *i.ContainerArn
+		labels["docker_image"] = *d.Image
 
 		exporterPath, ok = d.DockerLabels[*prometheusPathLabel]
 		if ok {
-			labels.MetricsPath = exporterPath
+			// Default labels
+			labels["__metrics_path__"] = exporterPath
 		}
 
 		scheme, ok = d.DockerLabels[*prometheusSchemeLabel]
 		if ok {
-		    labels.Scheme = scheme
+			// Default labels
+			labels["__scheme__"] = scheme
 		}
 
 		ret = append(ret, &PrometheusTaskInfo{
@@ -414,9 +410,7 @@ func DescribeInstancesUnpaginated(svc *ec2.Client, instanceIds []string) ([]ec2t
 	}
 	result := []ec2types.Instance{}
 	for _, rsv := range finalOutput.Reservations {
-		for _, i := range rsv.Instances {
-			result = append(result, i)
-		}
+		result = append(result, rsv.Instances...)
 	}
 	return result, nil
 }
@@ -531,6 +525,7 @@ func GetTasksOfClusters(svc *ecs.Client, clusterArns []*string) ([]ecstypes.Task
 					inDescribe := &ecs.DescribeTasksInput{
 						Cluster: clusterArn,
 						Tasks:   output.TaskArns,
+						Include: ecstypes.TaskFieldTags.Values(),
 					}
 					descOutput, err2 := svc.DescribeTasks(context.Background(), inDescribe)
 					if err2 != nil {
@@ -568,9 +563,7 @@ func GetTasksOfClusters(svc *ecs.Client, clusterArns []*string) ([]ecstypes.Task
 		if result.err != nil {
 			return nil, result.err
 		}
-		for _, task := range result.out.Tasks {
-			tasks = append(tasks, task)
-		}
+		tasks = append(tasks, result.out.Tasks...)
 	}
 
 	return tasks, nil
