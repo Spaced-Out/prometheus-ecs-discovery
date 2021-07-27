@@ -60,8 +60,7 @@ var outFile = flag.String("config.write-to", "ecs_file_sd.yml", "path of file to
 var interval = flag.Duration("config.scrape-interval", 60*time.Second, "interval at which to scrape the AWS API for ECS service discovery information")
 var times = flag.Int("config.scrape-times", 0, "how many times to scrape before exiting (0 = infinite)")
 var roleArn = flag.String("config.role-arn", "", "ARN of the role to assume when scraping the AWS API (optional)")
-var enableECSTags = flag.Bool("config.enable-ecs-tags", false, "Enable ECS tags to be propagated as labels during scrape")
-var filterECSTags = flag.String("config.filter-ecs-tags", "", "Specify CSV list of tags to filter and add as labels (defaults to all tags) when \"config.enable-ecs-tags\" is enabled")
+var filterECSTags = flag.String("config.filter-ecs-tags", "", "Specify CSV list of tags to filter and add as labels (defaults to all tags)")
 var prometheusPortLabel = flag.String("config.port-label", "PROMETHEUS_EXPORTER_PORT", "Docker label to define the scrape port of the application (if missing an application won't be scraped)")
 var prometheusPathLabel = flag.String("config.path-label", "PROMETHEUS_EXPORTER_PATH", "Docker label to define the scrape path of the application")
 var prometheusSchemeLabel = flag.String("config.scheme-label", "PROMETHEUS_EXPORTER_SCHEME", "Docker label to define the scheme of the target application")
@@ -69,6 +68,21 @@ var prometheusFilterLabel = flag.String("config.filter-label", "", "Docker label
 var prometheusServerNameLabel = flag.String("config.server-name-label", "PROMETHEUS_EXPORTER_SERVER_NAME", "Docker label to define the server name")
 var prometheusJobNameLabel = flag.String("config.job-name-label", "PROMETHEUS_EXPORTER_JOB_NAME", "Docker label to define the job name")
 var prometheusDynamicPortDetection = flag.Bool("config.dynamic-port-detection", false, fmt.Sprintf("If true, only tasks with the Docker label %s=1 will be scraped", dynamicPortLabel))
+
+// filterECSTagsEnabled tracks if ECS tags needs to be filtered
+var filterECSTagsEnabled bool = false
+
+// isFlagPassed returns true if the flag has been used on the command line
+func isFlagPassed(name string) bool {
+	found := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+
+	return found
+}
 
 // logError is a convenience function that decodes all possible ECS
 // errors and displays them to standard error.
@@ -201,18 +215,16 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 	ecsTags := make(map[string]string)
 
 	// Add ECS task tags as labels
-	if *enableECSTags {
-		for _, tag := range t.Tags {
-			if len(filteredECSTags) > 0 {
-				// check if the ECS tag is in filtered tags
-				if _, ok := filteredECSTags[*tag.Key]; !ok {
-					continue
-				}
+	for _, tag := range t.Tags {
+		if len(filteredECSTags) > 0 {
+			// check if the ECS tag is in filtered tags
+			if _, ok := filteredECSTags[*tag.Key]; !ok {
+				continue
 			}
-
-			tagKey := normalizeLabelName(*tag.Key)
-			ecsTags[tagKey] = *tag.Value
 		}
+
+		tagKey := normalizeLabelName(*tag.Key)
+		ecsTags[tagKey] = *tag.Value
 	}
 
 	for _, i := range t.Containers {
@@ -635,13 +647,8 @@ func GetAugmentedTasks(svc *ecs.Client, svcec2 *ec2.Client, clusterArns []*strin
 // getFilteredECSTags returns filtered ECS tags as a map,
 // converts a comma separated ECS tags string into a map
 func getFilteredECSTags(ecsTags string) map[string]interface{} {
-	if !*enableECSTags {
-		// ECS tags disabled
-		return nil
-	}
-
-	if len(ecsTags) == 0 {
-		// no tags specified
+	if !filterECSTagsEnabled {
+		// filter not enabled
 		return nil
 	}
 
@@ -673,6 +680,9 @@ func main() {
 	// Initialise AWS Service clients
 	svc := ecs.NewFromConfig(config)
 	svcec2 := ec2.NewFromConfig(config)
+
+	// Check if the --config.filter-ecs-tags is used in command line
+	filterECSTagsEnabled = isFlagPassed("config.filter-ecs-tags")
 
 	// Prepare filtered list of ECS tags
 	filteredECSTags = getFilteredECSTags(*filterECSTags)
