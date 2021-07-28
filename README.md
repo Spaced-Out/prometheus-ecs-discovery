@@ -31,7 +31,7 @@ The command line parameters that can be used are:
   (if missing an application won't be scraped) (default "PROMETHEUS_EXPORTER_PORT")
 * -config.filter-ecs-tags (string): Specify CSV list of ECS task tags to filter and add as labels (defaults to all tags)
 * -config.scheme-label (string): Docker label to define the scheme of the target application (default "PROMETHEUS_EXPORTER_SCHEME")
-* -config.dynamic-port-detection (bool): If true, only tasks with the Docker label PROMETHEUS_DYNAMIC_EXPORT=1 will be scraped
+* -config.dynamic-port-detection (bool): If true, only tasks with the Docker label PROMETHEUS_DYNAMIC_EXPORT=1 will be scraped (default false)
 
 ## Usage
 
