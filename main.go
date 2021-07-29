@@ -323,6 +323,11 @@ func (t *AugmentedTask) ExporterInformation() []*PrometheusTaskInfo {
 			host = ip
 		}
 
+		if host == "" {
+			// No hostname or IP found for this container. Skip.
+			continue
+		}
+
 		labels := labels{
 			TaskArn:       *t.TaskArn,
 			TaskName:      *t.TaskDefinition.Family,
